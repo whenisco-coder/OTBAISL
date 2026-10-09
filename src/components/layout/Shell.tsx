@@ -114,10 +114,10 @@ export const Shell: React.FC<ShellProps> = ({ currentModule, onNavigate, childre
   }
 
   return (
-    <div className="min-h-screen bg-neutral-100 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col antialiased">
+    <div className="h-screen h-[100dvh] max-h-[100dvh] w-full bg-neutral-100 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col antialiased overflow-hidden">
       {/* 7-Day Backup Reminder Banner */}
       {!backupReminderDismissed && backupStatus.isOverdue && (
-        <div className="no-print bg-amber-500 text-neutral-950 px-4 py-2 text-xs font-mono flex items-center justify-between shadow-xs">
+        <div className="no-print bg-amber-500 text-neutral-950 px-4 py-2 text-xs font-mono flex items-center justify-between shadow-xs shrink-0">
           <div className="flex items-center gap-2 font-bold">
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>
@@ -148,9 +148,15 @@ export const Shell: React.FC<ShellProps> = ({ currentModule, onNavigate, childre
       )}
 
       {/* Main App Container */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Desktop Sidebar (Sidebar Navigation 240px-280px) */}
-        <aside className="no-print hidden md:flex flex-col w-64 bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800 shrink-0">
+        <aside
+          className="no-print hidden md:flex flex-col w-64 bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800 shrink-0"
+          style={{
+            paddingTop: 'env(safe-area-inset-top, 0px)',
+            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+          }}
+        >
           {/* Brand Zone (Single text element wordmark) */}
           <div className="p-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
             <div>
@@ -237,9 +243,16 @@ export const Shell: React.FC<ShellProps> = ({ currentModule, onNavigate, childre
         </aside>
 
         {/* Viewport Canvas */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-          {/* Top Bar Contract: Breadcrumb trail on left, action indicators on right */}
-          <header className="no-print bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5 flex items-center justify-between shrink-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative">
+          {/* Top Bar Contract: Pinned at top, accounts for mobile status bar notch */}
+          <header
+            className="no-print bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 px-3 sm:px-4 py-2.5 flex items-center justify-between shrink-0 z-30"
+            style={{
+              paddingTop: 'max(0.625rem, env(safe-area-inset-top, 0px))',
+              paddingLeft: 'max(0.75rem, env(safe-area-inset-left, 0px))',
+              paddingRight: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+            }}
+          >
             {/* Left: Mobile menu toggle + breadcrumb trail */}
             <div className="flex items-center gap-3">
               <button
@@ -296,13 +309,30 @@ export const Shell: React.FC<ShellProps> = ({ currentModule, onNavigate, childre
             </div>
           </header>
 
-          {/* Main Module Content */}
-          <main className="flex-1 p-4 md:p-6 pb-20 md:pb-6">{children}</main>
+          {/* Main Module Content: Only scrollable area, padded above bottom navigation */}
+          <main
+            className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 md:p-6"
+            style={{
+              paddingBottom: 'calc(4.75rem + max(0.5rem, env(safe-area-inset-bottom, 0px)))',
+              paddingLeft: 'max(0.75rem, env(safe-area-inset-left, 0px))',
+              paddingRight: 'max(0.75rem, env(safe-area-inset-right, 0px))',
+            }}
+          >
+            {children}
+          </main>
         </div>
       </div>
 
       {/* Mobile Bottom Tabs: Home · Orders · Products · Stock · More (Locked Spec) */}
-      <nav className="no-print md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 grid grid-cols-5 text-center h-14">
+      <nav
+        className="no-print md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md border-t border-neutral-200 dark:border-neutral-800 grid grid-cols-5 text-center shadow-lg"
+        style={{
+          height: 'calc(3.5rem + max(0.5rem, env(safe-area-inset-bottom, 0px)))',
+          paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom, 0px))',
+          paddingLeft: 'max(0.25rem, env(safe-area-inset-left, 0px))',
+          paddingRight: 'max(0.25rem, env(safe-area-inset-right, 0px))',
+        }}
+      >
         {mobileTabs.map(tab => {
           const Icon = tab.icon;
           const isActive = tab.id === 'more' ? isMobileMenuOpen : currentModule === tab.id;
@@ -339,7 +369,15 @@ export const Shell: React.FC<ShellProps> = ({ currentModule, onNavigate, childre
             className="fixed inset-0 bg-black/60 backdrop-blur-xs"
             onClick={() => setIsMobileMenuOpen(false)}
           />
-          <div className="relative w-4/5 max-w-xs bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800 p-4 flex flex-col justify-between shadow-2xl">
+          <div
+            className="relative w-4/5 max-w-xs bg-white dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800 p-4 flex flex-col justify-between shadow-2xl h-full overflow-y-auto"
+            style={{
+              paddingTop: 'max(1.25rem, env(safe-area-inset-top, 0px))',
+              paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom, 0px))',
+              paddingLeft: 'max(1rem, env(safe-area-inset-left, 0px))',
+              paddingRight: 'max(1rem, env(safe-area-inset-right, 0px))',
+            }}
+          >
             <div>
               <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-3 mb-2">
                 <span className="text-xs font-mono font-bold uppercase">All Modules</span>

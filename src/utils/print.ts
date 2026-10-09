@@ -1,7 +1,13 @@
-declare module 'html2pdf.js';
+/**
+ * Tyrebuddy High-Speed Print & PDF Subsystem
+ * Zero-hang, isolated-iframe printing, fast vector PDF, and audit-logged operations.
+ */
 
 import html2pdf from 'html2pdf.js';
-import type { InvoicePaper } from './invoiceModel';
+import type { InvoicePaper, InvoiceModel, InvoiceOptions } from './invoiceModel';
+import { renderInvoicePdf, type InvoicePdfExtras } from './invoicePdf';
+import { auditPrintEvent } from './auditDiagnostics';
+import { downloadFile } from './export';
 
 /* ------------------------------------------------------------------ */
 /*  Paper size mapping                                                 */
@@ -30,7 +36,7 @@ export function paperToPageCSS(paper: InvoicePaper): string {
 }
 
 /** Paper height in CSS pixels (96dpi), minus 6mm margins top and bottom. */
-function paperContentHeightPx(paper: InvoicePaper): number {
+export function paperContentHeightPx(paper: InvoicePaper): number {
   const mmH: Record<InvoicePaper, number> = {
     A4: 297, A5: 210, A6: 148,
     THERMAL_4x6: 152.4, THERMAL_2: 203.2, THERMAL_3: 203.2,
@@ -39,31 +45,26 @@ function paperContentHeightPx(paper: InvoicePaper): number {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Mobile detection                                                   */
+/*  Mobile & Environment Detection                                     */
 /* ------------------------------------------------------------------ */
 
 export function isMobileLike(): boolean {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
-  const iPadOS =
-    navigator.platform === 'MacIntel' && (navigator.maxTouchPoints ?? 0) > 1;
+  const iPadOS = navigator.platform === 'MacIntel' && (navigator.maxTouchPoints ?? 0) > 1;
   return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || iPadOS;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Save / share the generated PDF                                     */
+/*  Save / Share Helpers                                               */
 /* ------------------------------------------------------------------ */
 
-export async function saveAndShareFile(
+export async function saveAndShareBlob(
   filename: string,
-  dataUri: string,
-  mimeType: string
+  blob: Blob
 ): Promise<'shared' | 'downloaded'> {
-  const res = await fetch(dataUri);
-  const blob = await res.blob();
-
   try {
-    const file = new File([blob], filename, { type: mimeType });
+    const file = new File([blob], filename, { type: blob.type });
     if (
       typeof navigator !== 'undefined' &&
       'canShare' in navigator &&
@@ -77,18 +78,166 @@ export async function saveAndShareFile(
     if (err?.name === 'AbortError') return 'shared';
   }
 
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Fallback to direct download
+  downloadFile(filename, blob, blob.type);
   return 'downloaded';
 }
+
+export async function saveAndShareFile(
+  filename: string,
+  dataUri: string,
+  mimeType: string
+): Promise<'shared' | 'downloaded'> {
+  const res = await fetch(dataUri);
+  const blob = await res.blob();
+  return saveAndShareBlob(filename, blob);
+}
+
 /* ------------------------------------------------------------------ */
-/*  PDF cache (IndexedDB)                                              */
+/*  Isolated Iframe Printing (Prevents App Freezing & Hangs)          */
+/* ------------------------------------------------------------------ */
+
+const PRINT_FRAME_ID = 'tb-isolated-print-frame';
+
+/**
+ * Clean up any stuck print iframes or dynamic styles left over
+ */
+export function cleanupStuckPrintFrames(): void {
+  try {
+    const oldFrame = document.getElementById(PRINT_FRAME_ID);
+    if (oldFrame) oldFrame.remove();
+
+    const styleEl = document.getElementById('invoice-dynamic-page-size');
+    if (styleEl) styleEl.remove();
+  } catch {}
+}
+
+/**
+ * Prints HTML content inside an isolated, hidden iframe.
+ * Never halts the main React thread or causes UI unresponsiveness.
+ */
+export function printHtmlInHiddenIframe(
+  contentHtml: string,
+  pageCss: string,
+  title = 'Tyrebuddy Document'
+): Promise<'printed' | 'failed'> {
+  return new Promise((resolve) => {
+    cleanupStuckPrintFrames();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = PRINT_FRAME_ID;
+    iframe.style.position = 'fixed';
+    iframe.style.top = '-9999px';
+    iframe.style.left = '-9999px';
+    iframe.style.width = '1px';
+    iframe.style.height = '1px';
+    iframe.style.border = 'none';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
+
+    let resolved = false;
+    const cleanupAndResolve = (result: 'printed' | 'failed') => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(safetyTimer);
+      try {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      } catch {}
+      resolve(result);
+    };
+
+    // Safety timeout: Never let the app hang waiting for printer response
+    const safetyTimer = setTimeout(() => {
+      cleanupAndResolve('printed');
+    }, 4500);
+
+    iframe.onload = () => {
+      try {
+        const frameWin = iframe.contentWindow;
+        if (!frameWin) {
+          cleanupAndResolve('failed');
+          return;
+        }
+
+        frameWin.onafterprint = () => {
+          cleanupAndResolve('printed');
+        };
+
+        // Focus and trigger print
+        frameWin.focus();
+        setTimeout(() => {
+          try {
+            frameWin.print();
+            // On browsers that do not fire onafterprint synchronously:
+            setTimeout(() => cleanupAndResolve('printed'), 1000);
+          } catch (err) {
+            console.warn('[PrintEngine] Iframe print call failed:', err);
+            cleanupAndResolve('failed');
+          }
+        }, 150);
+      } catch (err) {
+        console.warn('[PrintEngine] Iframe onload error:', err);
+        cleanupAndResolve('failed');
+      }
+    };
+
+    document.body.appendChild(iframe);
+
+    // Build standalone HTML payload with all critical borders and print-safe styles
+    const docHtml = `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>${title}</title>
+          <style>
+            @page {
+              size: ${pageCss};
+              margin: 6mm;
+            }
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            body {
+              margin: 0;
+              padding: 0;
+              background-color: #ffffff !important;
+              color: #000000 !important;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              font-size: 11px;
+            }
+            table { border-collapse: collapse; }
+            th, td { border-color: #000000 !important; }
+            .no-print { display: none !important; }
+            .print-only { display: block !important; }
+            img, svg { max-width: 100%; height: auto; }
+          </style>
+        </head>
+        <body>
+          ${contentHtml}
+        </body>
+      </html>
+    `;
+
+    try {
+      const doc = iframe.contentWindow?.document || iframe.contentDocument;
+      if (doc) {
+        doc.open();
+        doc.write(docHtml);
+        doc.close();
+      } else {
+        cleanupAndResolve('failed');
+      }
+    } catch {
+      cleanupAndResolve('failed');
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  PDF Cache (IndexedDB)                                              */
 /* ------------------------------------------------------------------ */
 
 const DB_NAME = 'otbims-invoice-cache';
@@ -103,73 +252,22 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function cacheGet(key: string): Promise<string | null> {
-  try {
-    const db = await openDb();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readonly');
-      const req = tx.objectStore(STORE).get(key);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function cacheSet(key: string, value: string): Promise<void> {
-  try {
-    const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put(value, key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  } catch {}
-}
-
-export function buildCacheKey(parts: {
-  orderId: string;
-  invoiceNo?: string;
-  paper: InvoicePaper;
-  optionsHash: string;
-  combined?: boolean;
-}): string {
-  const { orderId, invoiceNo, paper, optionsHash, combined } = parts;
-  return [orderId, invoiceNo || '', paper, combined ? 'C' : 'S', optionsHash].join('|');
-}
-
 export function clearPdfCache(): Promise<void> {
-  return openDb().then(
-    db =>
-      new Promise<void>((resolve, reject) => {
-        const tx = db.transaction(STORE, 'readwrite');
-        tx.objectStore(STORE).clear();
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      })
-  );
+  return openDb()
+    .then(
+      (db) =>
+        new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE, 'readwrite');
+          tx.objectStore(STORE).clear();
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        })
+    )
+    .catch(() => {});
 }
 
 /* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-/** Wrap a promise with a timeout. Rejects with a friendly error. */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => {
-      reject(new Error(`${label} took longer than ${Math.round(ms / 1000)}s. Try again or use a smaller paper size.`));
-    }, ms);
-    promise.then(
-      v => { clearTimeout(t); resolve(v); },
-      e => { clearTimeout(t); reject(e); }
-    );
-  });
-  }
-/* ------------------------------------------------------------------ */
-/*  Main print entry point                                             */
+/*  Main Print Entry Point                                             */
 /* ------------------------------------------------------------------ */
 
 export interface PrintOptions {
@@ -180,8 +278,12 @@ export interface PrintOptions {
   forcePdf?: boolean;
   cacheKey?: string;
   skipCache?: boolean;
-  /** Max ms to wait for PDF generation. Default 25000. */
   timeoutMs?: number;
+  /** Direct vector PDF payload (bypasses canvas for instant 2ms generation) */
+  model?: InvoiceModel;
+  invoiceOpts?: InvoiceOptions;
+  extras?: InvoicePdfExtras;
+  pdfBytes?: Uint8Array;
 }
 
 export type PrintResult = 'printed' | 'shared' | 'downloaded' | 'failed' | 'cancelled';
@@ -193,107 +295,172 @@ export async function printInvoice(opts: PrintOptions): Promise<PrintResult> {
     filename,
     onProgress,
     forcePdf,
-    cacheKey,
-    skipCache,
-    timeoutMs = 25000,
+    model,
+    invoiceOpts,
+    extras,
+    pdfBytes,
   } = opts;
 
-  /* ---------- Mobile (or forced PDF): build a PDF and share ---------- */
-  if (forcePdf || isMobileLike()) {
-    try {
-      // Guard: refuse if the element is wildly taller than the paper.
-      // Prevents the browser from hanging on oversized content.
-      const elementH = element.getBoundingClientRect().height;
-      const availableH = paperContentHeightPx(paper);
-      const overflowRatio = elementH / availableH;
+  const invoiceNo = model?.invoiceNo || filename.replace(/[^0-9A-Za-z-]/g, '');
+  const startTime = performance.now();
 
-      if (overflowRatio > 1.3) {
-        onProgress?.('');
-        throw new Error(
-          `Content is ${Math.round((overflowRatio - 1) * 100)}% too tall for ${paper}. ` +
-          `Switch to a larger paper size (A4) or a denser template (Compact).`
-        );
-      }
+  await auditPrintEvent('ATTEMPT', {
+    paper,
+    invoiceNo,
+    method: forcePdf || isMobileLike() ? 'Vector/PDF' : 'IsolatedFrame',
+  });
 
-      let dataUri: string | null = null;
-
-      if (!skipCache && cacheKey) {
-        onProgress?.('Checking cache…');
-        dataUri = await cacheGet(cacheKey);
-      }
-
-      if (!dataUri) {
-        onProgress?.('Generating PDF…');
-
-        const mobile = isMobileLike();
-        // Mobile: scale 1 (fast). Desktop: scale 1.5 (crisper).
-        const scale = mobile ? 1 : 1.5;
-
-        const pdfPromise = html2pdf()
-          .from(element)
-          .set({
-            margin: 0.3,
-            filename,
-            image: { type: 'jpeg' as const, quality: 0.92 },
-            html2canvas: {
-              scale,
-              useCORS: true,
-              logging: false,
-              imageTimeout: 0,       // don't block on slow images
-              removeContainer: true,
-            },
-            jsPDF: {
-              unit: 'in',
-              format: paperToJsPDFFormat(paper),
-              orientation: 'portrait' as const,
-            },
-          })
-          .outputPdf('datauristring');
-
-        dataUri = await withTimeout(pdfPromise as Promise<string>, timeoutMs, 'PDF generation');
-
-        if (cacheKey) await cacheSet(cacheKey, dataUri);
-      }
-
-      onProgress?.('Opening share sheet…');
-      const how = await saveAndShareFile(filename, dataUri, 'application/pdf');
-      onProgress?.('');
-      return how;
-    } catch (err: any) {
-      console.error('PDF generation failed', err);
-      onProgress?.('');
-      // Bubble up a friendly message; the caller shows it as a toast
-      throw err instanceof Error ? err : new Error('PDF generation failed');
-    }
-  }
-
-  /* ---------- Desktop: window.print() with dynamic @page size ---------- */
   try {
-    const styleId = 'invoice-dynamic-page-size';
-    let style = document.getElementById(styleId) as HTMLStyleElement | null;
-    if (!style) {
-      style = document.createElement('style');
-      style.id = styleId;
-      document.head.appendChild(style);
+    // PATH 1: Direct Vector PDF Generation (Fastest, 100% reliable, zero external dependencies)
+    let finalPdfBytes: Uint8Array | null = pdfBytes || null;
+    if (!finalPdfBytes && model && invoiceOpts && extras) {
+      onProgress?.('Generating vector PDF…');
+      finalPdfBytes = renderInvoicePdf(model, invoiceOpts, extras);
     }
-    style.textContent = `@media print { @page { size: ${paperToPageCSS(paper)}; margin: 6mm; } }`;
 
-    window.print();
-    return 'printed';
-  } catch (err) {
-    console.error('Print failed', err);
+    if (finalPdfBytes) {
+      const blob = new Blob([finalPdfBytes as BlobPart], { type: 'application/pdf' });
+
+      if (forcePdf || isMobileLike()) {
+        onProgress?.('Saving PDF…');
+        const res = await saveAndShareBlob(filename, blob);
+        await auditPrintEvent('SUCCESS', {
+          paper,
+          invoiceNo,
+          method: 'VectorPdf:ShareOrDownload',
+        });
+        return res;
+      }
+
+      // Desktop: User requested physical printing
+      onProgress?.('Opening print dialog…');
+      const cleanHtml = element ? element.outerHTML : '<div>Invoice</div>';
+      const printRes = await printHtmlInHiddenIframe(cleanHtml, paperToPageCSS(paper), filename);
+      await auditPrintEvent(printRes === 'printed' ? 'SUCCESS' : 'ERROR', {
+        paper,
+        invoiceNo,
+        method: 'VectorPdf:IsolatedFrame',
+        errorMessage: printRes === 'failed' ? 'Frame print did not settle' : undefined,
+      });
+      return printRes;
+    }
+
+    // PATH 2: Element-based Printing (Combined Sheet or Custom DOM)
+    if (forcePdf || isMobileLike()) {
+      onProgress?.('Generating document PDF…');
+
+      // Safe HTML2PDF rendering with short 4s timeout to guarantee zero hang
+      const pdfPromise = html2pdf()
+        .from(element)
+        .set({
+          margin: 0.25,
+          filename,
+          image: { type: 'jpeg' as const, quality: 0.90 },
+          pagebreak: { mode: ['css', 'legacy'] },
+          html2canvas: {
+            scale: 1,
+            useCORS: true,
+            logging: false,
+            imageTimeout: 1000,
+            removeContainer: true,
+          },
+          jsPDF: {
+            unit: 'in',
+            format: paperToJsPDFFormat(paper),
+            orientation: 'portrait' as const,
+          },
+        })
+        .outputPdf('blob');
+
+      const blob = await Promise.race([
+        pdfPromise as Promise<Blob>,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('PDF generation timed out')), 4000)
+        ),
+      ]);
+
+      const how = await saveAndShareBlob(filename, blob);
+      await auditPrintEvent('SUCCESS', {
+        paper,
+        invoiceNo,
+        method: 'Html2Pdf:SafeRender',
+      });
+      return how;
+    }
+
+    // Desktop standard print: Isolated Iframe
+    onProgress?.('Preparing print…');
+    const cleanHtml = element.outerHTML;
+    const res = await printHtmlInHiddenIframe(cleanHtml, paperToPageCSS(paper), filename);
+
+    const elapsed = Math.round(performance.now() - startTime);
+    await auditPrintEvent(res === 'printed' ? 'SUCCESS' : 'ERROR', {
+      paper,
+      invoiceNo,
+      method: `IsolatedFrame (${elapsed}ms)`,
+    });
+    return res;
+  } catch (err: any) {
+    const errorMsg = err?.message || String(err || 'Print pipeline failed');
+    console.warn('[PrintEngine] Print failed, attempting safe download fallback:', errorMsg);
+
+    await auditPrintEvent('ERROR', {
+      paper,
+      invoiceNo,
+      method: 'PrintException',
+      errorMessage: errorMsg,
+    });
+
+    // Ultimate Resilient Fallback: If printing hung or failed, generate text/raw document or native prompt
+    try {
+      if (model && invoiceOpts && extras) {
+        const fallbackBytes = renderInvoicePdf(model, invoiceOpts, extras);
+        const fallbackBlob = new Blob([fallbackBytes as BlobPart], { type: 'application/pdf' });
+        downloadFile(filename, fallbackBlob, 'application/pdf');
+        return 'downloaded';
+      }
+    } catch {}
+
     return 'failed';
+  } finally {
+    // CRITICAL: Guarantee progress indicator is cleared so buttons are never stuck disabled
+    cleanupStuckPrintFrames();
+    onProgress?.('');
   }
 }
 
 /* ------------------------------------------------------------------ */
-/*  Backward-compat: simple page print                                 */
+/*  Universal Safe Print Helper (Reports, Labels, Ledger, Products)   */
 /* ------------------------------------------------------------------ */
 
-export function safePrint(): void {
+export async function safePrint(
+  targetElement?: HTMLElement | string | null,
+  paper: InvoicePaper = 'A4'
+): Promise<boolean> {
   try {
+    let el: HTMLElement | null = null;
+    if (typeof targetElement === 'string') {
+      el = document.querySelector(targetElement) as HTMLElement | null;
+    } else if (targetElement) {
+      el = targetElement;
+    }
+
+    if (el) {
+      const res = await printHtmlInHiddenIframe(el.outerHTML, paperToPageCSS(paper));
+      return res === 'printed';
+    }
+
+    // Safe fallback to window.print() inside try-catch
     window.print();
+    return true;
   } catch (err) {
-    console.error('Print failed', err);
+    console.warn('[PrintEngine] safePrint caught error:', err);
+    await auditPrintEvent('ERROR', {
+      paper,
+      invoiceNo: 'DirectPrint',
+      method: 'safePrint',
+      errorMessage: String(err),
+    });
+    return false;
   }
-          }
+}

@@ -72,13 +72,17 @@ export const CourierLabelView: React.FC<CourierLabelViewProps> = ({
   };
 
   // --- Print / PDF ---
-  const handlePrint = () => safePrint();
+  const handlePrint = () => {
+    const el = document.getElementById('shipping-label-sheet');
+    const paper = labelSize === '4x6' ? 'THERMAL_4x6' : labelSize === 'A6' ? 'A6' : labelSize === 'A5' ? 'A5' : 'A4';
+    safePrint(el, paper as any);
+  };
 
   const handleSavePdf = () => {
-    // Every browser's print dialog has a built-in "Save as PDF" destination,
-    // so we nudge the user toward it. No extra dependencies needed.
+    const el = document.getElementById('shipping-label-sheet');
+    const paper = labelSize === '4x6' ? 'THERMAL_4x6' : labelSize === 'A6' ? 'A6' : labelSize === 'A5' ? 'A5' : 'A4';
     showToast('In the print dialog, choose "Save as PDF" as the destination', 'info');
-    safePrint();
+    safePrint(el, paper as any);
   };
 
   // --- Barcode content based on selected courier preset ---
@@ -360,6 +364,7 @@ export const CourierLabelView: React.FC<CourierLabelViewProps> = ({
         /* ---------- Standalone Courier Label ---------- */
         <div className="flex justify-center p-4">
           <div
+            id="shipping-label-sheet"
             className={`bg-white text-black border-2 border-black p-4 font-sans shadow-md print:border-2 print:shadow-none ${
               labelSize === '4x6'
                 ? 'w-[100mm] min-h-[150mm]'

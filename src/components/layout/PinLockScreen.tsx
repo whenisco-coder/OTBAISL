@@ -46,8 +46,16 @@ export const PinLockScreen: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/90 backdrop-blur-sm p-4 text-white">
-      <div className="w-full max-w-sm bg-neutral-900 border border-neutral-800 p-8 shadow-2xl flex flex-col items-center">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/90 backdrop-blur-sm p-4 text-white overflow-y-auto"
+      style={{
+        paddingTop: 'max(1.5rem, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(1rem, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(1rem, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <div className="w-full max-w-sm bg-neutral-900 border border-neutral-800 p-6 sm:p-8 shadow-2xl flex flex-col items-center my-auto">
         {/* Brand Header */}
         <div className="w-12 h-12 bg-neutral-800 border border-neutral-700 flex items-center justify-center mb-4 text-neutral-200">
           <ShieldCheck className="w-6 h-6" />

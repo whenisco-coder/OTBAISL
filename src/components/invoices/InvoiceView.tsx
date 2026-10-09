@@ -11,6 +11,8 @@ import {
   buildInvoiceModel,
 } from '../../utils/invoiceModel';
 import { printInvoice } from '../../utils/print';
+import { type InvoicePdfExtras } from '../../utils/invoicePdf';
+import QRCode from 'qrcode';
 import { predictOverflow } from '../../utils/measure';
 import { PrePrintDialog, type PrePrintResult } from './PrePrintDialog';
 import {
@@ -380,27 +382,61 @@ export const InvoiceView: React.FC<InvoiceViewProps> = ({ order, onBack, onViewL
       ? `Invoice-Label-${order.invoiceNo || order.orderNo}.pdf`
       : `Invoice-${order.invoiceNo || order.orderNo}.pdf`;
 
+  const extras: InvoicePdfExtras = useMemo(() => {
+    let qrModules: { size: number; data: ArrayLike<number> } | null = null;
+    if (settings.upiId && opts.show.upi) {
+      try {
+        const upiString = `upi://pay?pa=${settings.upiId}&pn=${encodeURIComponent(settings.businessName)}&am=${model.grandTotal}&cu=INR`;
+        const qr = QRCode.create(upiString, { errorCorrectionLevel: 'M' });
+        qrModules = { size: qr.modules.size, data: qr.modules.data };
+      } catch {}
+    }
+
+    return {
+      businessName: settings.businessName,
+      declaration: undefined,
+      jurisdiction: opts.jurisdiction || 'Delhi',
+      bank: settings.bankName
+        ? {
+            holder: settings.accountName || settings.businessName,
+            bankName: settings.bankName,
+            accountNo: settings.accountNumber,
+            branch: settings.branch,
+            ifsc: settings.ifscCode,
+          }
+        : null,
+      upiId: settings.upiId,
+      qr: qrModules,
+    };
+  }, [settings, opts.show.upi, opts.jurisdiction, model.grandTotal]);
+
   const runPrint = async (forcePdf: boolean) => {
-  const el = getActiveRef();
-  if (!el) return;
-  setPrintProgress('Preparing…');
-  try {
-    const result = await printInvoice({
-      element: el,
-      paper: viewMode === 'combined' ? 'A5' : opts.paper,
-      filename: buildFilename(),
-      onProgress: setPrintProgress,
-      forcePdf,
-    });
-    setPrintProgress('');
-    if (result === 'shared') showToast('PDF sent to share sheet', 'success');
-    else if (result === 'downloaded') showToast('PDF downloaded', 'success');
-    else if (result === 'failed') showToast('Print failed.', 'error');
-  } catch (err: any) {
-    setPrintProgress('');
-    showToast(err?.message || 'PDF generation failed', 'error');
-  }
-};
+    const el = getActiveRef();
+    if (!el) return;
+    setPrintProgress('Preparing…');
+    try {
+      const result = await printInvoice({
+        element: el,
+        paper: viewMode === 'combined' ? 'A5' : opts.paper,
+        filename: buildFilename(),
+        onProgress: setPrintProgress,
+        forcePdf,
+        model: viewMode === 'invoice' ? model : undefined,
+        invoiceOpts: viewMode === 'invoice' ? opts : undefined,
+        extras: viewMode === 'invoice' ? extras : undefined,
+      });
+      setPrintProgress('');
+      if (result === 'shared') showToast('PDF sent to share sheet', 'success');
+      else if (result === 'downloaded') showToast('PDF downloaded successfully', 'success');
+      else if (result === 'printed') showToast('Printed successfully', 'success');
+      else if (result === 'failed') showToast('Print did not complete. Try saving as PDF.', 'error');
+    } catch (err: any) {
+      setPrintProgress('');
+      showToast(err?.message || 'PDF generation failed', 'error');
+    } finally {
+      setPrintProgress('');
+    }
+  };
   const handlePrint = () => {
     const el = getActiveRef();
     if (!el) return;

@@ -50,7 +50,12 @@ export const FileReadyBanner: React.FC = () => {
   const canShare = typeof navigator !== 'undefined' && !!(navigator as any).share;
 
   return (
-    <div className="no-print fixed left-2 right-2 bottom-16 md:bottom-4 md:left-auto md:right-4 md:w-96 z-[70] space-y-2">
+    <div
+      className="no-print fixed left-2 right-2 md:bottom-4 md:left-auto md:right-4 md:w-96 z-[70] space-y-2"
+      style={{
+        bottom: typeof window !== 'undefined' && window.innerWidth < 768 ? 'calc(4.25rem + max(0.5rem, env(safe-area-inset-bottom, 0px)))' : undefined,
+      }}
+    >
       {notice && (
         <div className="bg-amber-100 border border-amber-400 text-amber-950 text-xs p-3 shadow-lg flex items-start gap-2">
           <span className="flex-1">{notice}</span>

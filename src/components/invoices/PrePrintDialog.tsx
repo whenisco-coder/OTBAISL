@@ -48,8 +48,14 @@ export const PrePrintDialog: React.FC<Props> = ({
   const hasProblem = !invoiceFits || !combinedFits;
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 w-full max-w-md p-5 space-y-4">
+    <div
+      className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      style={{
+        paddingTop: 'max(1rem, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))',
+      }}
+    >
+      <div className="bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 w-full max-w-md p-5 space-y-4 my-auto shadow-2xl">
         <div className="flex items-center justify-between border-b pb-3">
           <h2 className="font-bold text-sm flex items-center gap-2">
             {hasProblem ? (
@@ -94,8 +100,22 @@ export const PrePrintDialog: React.FC<Props> = ({
           )}
 
           {!invoiceFits && (
-            <div className="text-red-700 dark:text-red-400 font-semibold">
-              ✗ Invoice is {overflowMm} mm over {paper}
+            <div className="space-y-2">
+              <div className="text-red-700 dark:text-red-400 font-semibold">
+                ✗ Invoice is {overflowMm} mm over {paper}
+              </div>
+              {paper !== 'A4' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedPaper('A4');
+                    onClose({ action: 'changePaper', paper: 'A4' });
+                  }}
+                  className="w-full py-1.5 px-3 bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center justify-center gap-1.5 transition"
+                >
+                  ⚡ Auto-Switch to A4 Full Page (Fits 297 mm)
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -122,7 +142,7 @@ export const PrePrintDialog: React.FC<Props> = ({
         <div className="flex justify-between items-center pt-2 border-t gap-2">
           <button
             onClick={() => onClose({ action: 'cancel' })}
-            className="px-3 py-1.5 border text-xs font-semibold"
+            className="px-3 py-1.5 border text-xs font-semibold hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
             Cancel
           </button>
@@ -136,7 +156,7 @@ export const PrePrintDialog: React.FC<Props> = ({
               </button>
             )}
             <button
-              onClick={() => onClose({ action: 'proceed' })}
+              onClick={() => onClose({ action: 'proceed', paper: selectedPaper })}
               className="px-4 py-1.5 bg-neutral-900 dark:bg-white text-white dark:text-neutral-950 text-xs font-bold flex items-center gap-1.5"
             >
               {onSavePdf ? <FileDown className="w-3.5 h-3.5" /> : <Printer className="w-3.5 h-3.5" />}
